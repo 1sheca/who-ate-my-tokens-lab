@@ -1,88 +1,124 @@
-# Who Ate My Tokens? Observing LLM Agents with Grafana and the GitHub Copilot CLI
+# Who Ate My Tokens?
 
-A hands-on lab. You run a small "support agent" that reports its token usage, cost and latency to Prometheus, then use the **GitHub Copilot CLI** in your terminal to write the queries and build the Grafana dashboard that shows where the tokens go.
+**Observing LLM agents with Grafana, built with the GitHub Copilot CLI.**
 
-No API key needed: the agent runs in **fake LLM mode** by default (realistic token counts, zero cost, works offline).
+AI agents hide their work. One user question can turn into many calls to an AI model and to tools, and every call costs tokens. Each step re-sends everything before it, so later steps cost more, and a failing tool can make an agent retry until the bill explodes.
+
+This project makes that visible. A small demo agent reports its tokens, cost, speed and tool calls. Prometheus collects the numbers, Grafana shows them, and the GitHub Copilot CLI writes the queries and dashboards from plain English.
+
+```mermaid
+flowchart LR
+  Q[Questions] --> A[Demo agent<br/>/metrics]
+  A -->|every 5 s| P[Prometheus<br/>stores numbers]
+  P --> G[Grafana<br/>dashboards]
+  C[GitHub Copilot CLI] -. writes queries and dashboards .-> G
+  C -. reads Grafana via MCP .-> M[Grafana MCP server<br/>read-only]
+  M --> G
+```
+
+## What you will learn
+
+| Lab | Problem it solves | What you build | Result |
+|---|---|---|---|
+| **Lab 1** · Ask in plain English | Prometheus needs PromQL, which few people know | Copilot writes queries; you check them in Grafana | Tokens per question, cost per hour, p95 time |
+| **Lab 2** · Dashboard as code | One-off queries vanish; teams need a page to watch | Copilot writes a Grafana dashboard file | A live "Who Ate My Tokens?" dashboard |
+| **Lab 3** · Catch a runaway agent | Retrying agents burn tokens silently | Break a tool on purpose and watch the spike | You find the cause: a failing tool plus retries |
+
+## Why a demo agent instead of a real AI API?
+
+The agent runs in **fake LLM mode** by default: it simulates AI calls with realistic token counts and delays.
+
+- No API keys, sign-ups or costs for anyone
+- Works offline and gives the same behaviour on every laptop
+- No rate limits, even with a full room running it at once
+
+The token mechanics are the same as with a real model, and the agent can switch to a real model (see [Real model mode](#real-model-mode)). Prices in the lab are illustrative.
+
+## Requirements
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Node.js 22+](https://nodejs.org) and [Git](https://git-scm.com/downloads)
+- A GitHub account with Copilot (the free plan works)
+- GitHub Copilot CLI: `npm install -g @github/copilot`, then run `copilot` and type `/login`
+
+No Docker? Open this repo in **GitHub Codespaces** (Code › Codespaces); everything is preinstalled.
+
+## Quick start
+
+```bash
+git clone https://github.com/1sheca/who-ate-my-tokens-lab
+cd who-ate-my-tokens-lab
+docker compose up -d --build
+```
+
+| Service | Address | Notes |
+|---|---|---|
+| Grafana | http://localhost:3000 | login `admin` / `admin`, then Skip |
+| Prometheus | http://localhost:9090 | `/targets` should show `token-agent` UP |
+| Demo agent | http://localhost:8080 | `/metrics` shows the raw numbers |
+
+Check it works: Grafana › **Explore** › **Prometheus** › Code › `agent_llm_tokens_total` › **Run query**. You should see lines climbing.
 
 ---
 
-## Option A: on your laptop (recommended)
-
-### Before the session (about 15 minutes)
-
-1. Install **Docker Desktop**, **Node.js 22+** and **Git**.
-2. Install the GitHub Copilot CLI (pick one):
-   - `npm install -g @github/copilot`
-   - Windows: `winget install GitHub.Copilot`
-   - macOS / Linux: `brew install --cask copilot-cli`
-3. Sign in: run `copilot`, type `/login`, follow the browser prompt. A personal GitHub account with **Copilot Free** is enough.
-4. Get this repo and download everything in advance (venue Wi-Fi is slow):
-   ```bash
-   git clone <repo-url> who-ate-my-tokens-lab
-   cd who-ate-my-tokens-lab
-   docker compose --profile mcp pull
-   docker compose build
-   ```
-
-### Start the lab
+## Lab 1 · Ask your agent's numbers in plain English
 
 ```bash
-docker compose up -d
+copilot -sp "Write a PromQL query for tokens per question for my agent"
 ```
 
-| What | URL | Notes |
-| --- | --- | --- |
-| Agent | http://localhost:8080 | `/ask?q=...` runs the agent once |
-| Prometheus | http://localhost:9090 | `/targets` should show `token-agent` **UP** |
-| Grafana | http://localhost:3000 | login `admin` / `admin` |
-| Grafana MCP server (Lab 3) | http://localhost:8000/mcp | start with `docker compose --profile mcp up -d` |
+Paste the answer into Grafana Explore. Expect about **4,000 tokens per question**.
 
-## Option B: no Docker? Use GitHub Codespaces
-
-On this repo's GitHub page: **Code > Codespaces > Create codespace**. The container installs Docker and the Copilot CLI for you. Then run `docker compose up -d` in its terminal and open port 3000 from the **Ports** tab. Personal GitHub accounts include free Codespaces hours each month.
-
----
-
-## Lab 1: Ask your agent's metrics
-
-In the lab folder:
-
-```bash
-copilot -sp "Write a PromQL query for tokens per question for the agent"
-```
-
-Paste the query into **Grafana > Explore > Prometheus** and run it. Then, inside `copilot`:
+Then run `copilot` and ask:
 
 > Write PromQL for: tokens per second by agent step, cost per hour in USD, and p95 time per question. Then run each one against http://localhost:9090/api/v1/query with curl and summarise the results.
 
-## Lab 2: Token dashboard as code
+Copilot knows the metric names because it reads [`.github/copilot-instructions.md`](.github/copilot-instructions.md) automatically.
 
-Inside `copilot`:
+## Lab 2 · Dashboard as code
+
+In `copilot`:
 
 > Create grafana/dashboards/tokens.json: a Grafana dashboard titled "Who Ate My Tokens?", uid "tokens", Prometheus datasource uid "prometheus". Panels: stat for tokens per question, stat for cost per hour, time series of tokens per second by step, bar gauge of cost by step over the selected time range, time series of tool calls by tool and status. Refresh 5s, last 15 minutes.
 
-Open **Grafana > Dashboards > Workshop** within ~10 seconds. Fell behind? `cp checkpoints/token-dashboard.json grafana/dashboards/`
+Approve the file. Within about 10 seconds it appears in Grafana › Dashboards › **Workshop**.
 
-## Lab 3: Catch a runaway agent (demo)
+A finished version is in `checkpoints/`:
 
 ```bash
-docker compose --profile mcp up -d
+cp checkpoints/token-dashboard.json grafana/dashboards/      # macOS / Linux
+Copy-Item checkpoints\token-dashboard.json grafana\dashboards\  # Windows PowerShell
 ```
 
-In `copilot`: run `/mcp add`, name `grafana`, type **HTTP**, URL `http://localhost:8000/mcp`, tools `*`, then **Ctrl+S**. Check with `/mcp show grafana`.
+## Lab 3 · Catch a runaway agent
 
-Break the agent: `curl http://localhost:8080/chaos/runaway/on`, wait about a minute, then ask:
+Open the **Agent Overview** dashboard, then break the search tool:
+
+```bash
+curl http://localhost:8080/chaos/runaway/on     # Windows: curl.exe
+```
+
+Within a minute:
+
+| Signal | Normal | Runaway |
+|---|---|---|
+| Tokens per question | ~4,200 | ~12,700 |
+| Cost per hour (illustrative) | ~$9 | ~$51 |
+| Most expensive step | answer | **retry** |
+| search_docs errors | ~0 | ~3 per second |
+
+Fix it with `curl http://localhost:8080/chaos/runaway/off`.
+
+**Bonus: let Copilot investigate.** Start the read-only Grafana MCP server with `docker compose --profile mcp up -d`. In `copilot`, run `/mcp add` (name `grafana`, type HTTP, URL `http://localhost:8000/mcp`, tools `*`, Ctrl+S), then ask:
 
 > Using the Grafana tools, look at the token agent's metrics for the last 10 minutes. Why did tokens and cost jump, which step and tool are responsible, and what should I fix?
 
-Fix it: `curl http://localhost:8080/chaos/runaway/off`
-
 ---
 
-## Metrics reference
+## Metrics
 
 | Metric | Type | Labels |
-| --- | --- | --- |
+|---|---|---|
 | `agent_llm_tokens_total` | counter | `model`, `token_type`, `step` |
 | `agent_llm_cost_usd_total` | counter | `model`, `step` |
 | `agent_llm_calls_total` | counter | `model`, `step` |
@@ -93,40 +129,40 @@ Fix it: `curl http://localhost:8080/chaos/runaway/off`
 | `agent_llm_calls_per_request` | histogram | none |
 | `agent_runaway_mode` | gauge | none |
 
-Prices in the agent are illustrative, not any vendor's real price list.
+## Real model mode
 
-## Optional: real model mode
-
-The agent works with any OpenAI-compatible chat completions endpoint. Token counts then come from the real API response. Slow the load generator down so you stay inside free-tier rate limits.
-
-**GitHub Models (free tier for personal accounts, rate-limited).** Create a fine-grained personal access token with the `models:read` permission, then:
+Point the agent at any OpenAI-compatible endpoint. Slow the load generator down for free tiers.
 
 ```bash
-LLM_MODE=real \
-LLM_BASE_URL=https://models.github.ai/inference \
-LLM_API_KEY=<your-token> \
-LLM_MODEL=openai/gpt-4o-mini \
-INTERVAL_SECONDS=20 \
-docker compose up -d --build agent loadgen
+LLM_MODE=real LLM_BASE_URL=https://models.github.ai/inference LLM_API_KEY=<token> \
+LLM_MODEL=openai/gpt-4o-mini INTERVAL_SECONDS=20 docker compose up -d --build agent loadgen
 ```
 
-**Ollama (free, local, offline after the model download).** Install Ollama, run `ollama pull llama3.2:1b`, then:
+For a local model with Ollama: `LLM_BASE_URL=http://host.docker.internal:11434/v1 LLM_API_KEY=ollama LLM_MODEL=llama3.2:1b`.
 
-```bash
-LLM_MODE=real \
-LLM_BASE_URL=http://host.docker.internal:11434/v1 \
-LLM_API_KEY=ollama \
-LLM_MODEL=llama3.2:1b \
-INTERVAL_SECONDS=5 \
-docker compose up -d --build agent loadgen
-```
+## Troubleshooting
 
-(On Linux, `host.docker.internal` may need `extra_hosts: ["host.docker.internal:host-gateway"]` on the agent service.)
-
-Notes: the `model` label stays `model-large` / `model-mini` (the agent's step roles), and the cost uses the lab's illustrative prices. Never commit your token.
+| Problem | Fix |
+|---|---|
+| Windows: "port 9090 … forbidden by its access permissions" | In `docker-compose.yml` change `"9090:9090"` to `"19090:9090"`, then `docker compose up -d` |
+| Docker: "WSL not installed" | Run `wsl --install --no-distribution` in PowerShell as administrator, then restart |
+| PowerShell: "running scripts is disabled" | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
+| Grafana shows no data | Wait 30 s; set time range to "Last 15 minutes"; check Prometheus `/targets` |
 
 ## Clean up
 
 ```bash
 docker compose --profile mcp down
+```
+
+## Project layout
+
+```
+agent/                       demo agent (fake or real LLM) and load generator
+prometheus/prometheus.yml    collects the agent's metrics every 5 s
+grafana/provisioning/        connects Grafana to Prometheus, loads dashboards
+grafana/dashboards/          dashboards you create (Lab 2)
+checkpoints/                 finished dashboard
+.github/copilot-instructions.md   context Copilot reads automatically
+.devcontainer/               GitHub Codespaces setup
 ```
