@@ -1,0 +1,11 @@
+apiVersion: 1
+
+# Any dashboard JSON saved in grafana/dashboards/ appears in Grafana within ~10 seconds.
+providers:
+  - name: workshop
+    folder: Workshop
+    type: file
+    allowUiUpdates: true
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

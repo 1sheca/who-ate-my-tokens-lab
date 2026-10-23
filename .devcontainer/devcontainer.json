@@ -1,0 +1,17 @@
+{
+  "name": "Who Ate My Tokens? lab",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  "postCreateCommand": "npm install -g @github/copilot && docker compose pull && docker compose build",
+  "forwardPorts": [3000, 9090, 8080, 8000],
+  "portsAttributes": {
+    "3000": { "label": "Grafana" },
+    "9090": { "label": "Prometheus" },
+    "8080": { "label": "Agent" },
+    "8000": { "label": "Grafana MCP" }
+  },
+  "hostRequirements": { "cpus": 2, "memory": "4gb" }
+}

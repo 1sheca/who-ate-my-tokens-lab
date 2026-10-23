@@ -1,0 +1,72 @@
+name: tokenlab
+
+services:
+  agent:
+    build: ./agent
+    container_name: agent
+    environment:
+      LLM_MODE: ${LLM_MODE:-fake}          # set to "real" to call a real model
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+    ports:
+      - "8080:8080"
+
+  loadgen:
+    build: ./agent
+    container_name: loadgen
+    command: ["python", "loadgen.py"]
+    environment:
+      TARGET: http://agent:8080
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-0.85}   # use 15+ with a free, rate-limited real model
+    depends_on:
+      - agent
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - agent
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"      # lab only: view dashboards without logging in
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  # Lab 3 only: docker compose --profile mcp up -d
+  # Read-only Grafana MCP server over streamable HTTP at http://localhost:8000/mcp
+  mcp-grafana:
+    image: grafana/mcp-grafana:latest
+    container_name: mcp-grafana
+    profiles: ["mcp"]
+    command:
+      - "-t"
+      - "streamable-http"
+      - "--address"
+      - "0.0.0.0:8000"
+      - "--allowed-hosts"
+      - "localhost:8000,127.0.0.1:8000"
+      - "--disable-write"
+    environment:
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_USERNAME: admin
+      GRAFANA_PASSWORD: admin
+    ports:
+      - "8000:8000"
+    depends_on:
+      - grafana
